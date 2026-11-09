@@ -1,6 +1,7 @@
 """Dreame Home cloud API client."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -61,6 +62,12 @@ COUNTRY_BOOTSTRAP_REGION = {
 }
 
 AUTO_REGION_ORDER = ("eu", "i2", "de", "sg", "us", "in", "tw", "kr", "ru", "cn")
+AUTO_DISCOVERY_CONCURRENCY = 6
+AUTO_DISCOVERY_TIMEOUT = aiohttp.ClientTimeout(total=10)
+
+COUNTRY_CODES = tuple("""
+AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW
+""".split())
 
 
 def _md5_password(password: str) -> str:
@@ -118,6 +125,7 @@ class DreameAPI:
         region: str = "eu",
         country: str = "",
         session: aiohttp.ClientSession | None = None,
+        request_timeout: aiohttp.ClientTimeout | None = None,
     ) -> None:
         self._username = username
         self._password = password
@@ -136,8 +144,27 @@ class DreameAPI:
         self._uid: str | None = None
         self._session = session
         self._owns_session = session is None
+        self._request_timeout = request_timeout or (
+            AUTO_DISCOVERY_TIMEOUT if region == "auto" else REQUEST_TIMEOUT
+        )
         self._rlc = _compute_rlc(self._region, self._country)
         self._region_discovery_done = region != "auto"
+        self._authenticated_any = False
+
+    @property
+    def region(self) -> str:
+        """Selected cloud backend after discovery."""
+        return self._region
+
+    @property
+    def country(self) -> str:
+        """Country code used for the account login."""
+        return self._country
+
+    @property
+    def authenticated_any(self) -> bool:
+        """Whether discovery authenticated successfully on any candidate."""
+        return self._authenticated_any
 
     def _set_region(self, region: str) -> None:
         """Switch to a known Dreame cloud backend without re-authenticating."""
@@ -217,8 +244,10 @@ class DreameAPI:
 
         try:
             async with session.post(
-                url, headers=headers, data=data, timeout=REQUEST_TIMEOUT
+                url, headers=headers, data=data, timeout=self._request_timeout
             ) as resp:
+                if resp.status == 429:
+                    raise DreameAPIError("Dreame cloud rate-limited automatic discovery")
                 if resp.status != 200:
                     text = await resp.text()
                     raise DreameAuthError(f"Login failed ({resp.status}): {text[:200]}")
@@ -265,7 +294,7 @@ class DreameAPI:
                     url,
                     headers=self._get_auth_headers(),
                     json=payload,
-                    timeout=REQUEST_TIMEOUT,
+                    timeout=self._request_timeout,
                 ) as resp:
                     if resp.status == 401 and attempt == 1:
                         await self.login()
@@ -292,7 +321,7 @@ class DreameAPI:
                     url,
                     headers=self._get_auth_headers(),
                     params=params or {},
-                    timeout=REQUEST_TIMEOUT,
+                    timeout=self._request_timeout,
                 ) as resp:
                     if resp.status == 401 and attempt == 1:
                         await self.login()
@@ -410,7 +439,7 @@ class DreameAPI:
                 url,
                 headers=self._get_auth_headers(),
                 json=payload,
-                timeout=REQUEST_TIMEOUT,
+                timeout=self._request_timeout,
             ) as resp:
                 if resp.status != 200:
                     return []
@@ -420,38 +449,15 @@ class DreameAPI:
         return self._extract_device_records(result)
 
     async def get_devices(self) -> list[dict[str, Any]]:
-        """Return devices and auto-detect the correct cloud backend when requested."""
-        # Login may redirect the account to its authoritative region/domain.
-        # Resolve that before constructing the device-list URL.
-        await self._ensure_logged_in()
-        records = await self._get_devices_from_url(
-            self._base_url, relogin_on_401=True
-        )
-
-        if records:
+        """Return devices, searching all backend/country pairs in auto mode."""
+        if self._requested_region == "auto" and not self._region_discovery_done:
             self._region_discovery_done = True
-        if not records and self._requested_region == "auto" and not self._region_discovery_done:
-            # A missing/offline device must not restart a full backend search
-            # every time the periodic snapshot is refreshed. One bounded scan
-            # per client is enough; a reload permits a deliberate fresh attempt.
-            self._region_discovery_done = True
-            tried = {self._region}
-            for region in AUTO_REGION_ORDER:
-                if region in tried:
-                    continue
-                tried.add(region)
-                candidate_records = await self._get_devices_from_url(
-                    REGION_URLS[region], relogin_on_401=False
-                )
-                if candidate_records:
-                    self._set_region(region)
-                    records = candidate_records
-                    _LOGGER.info(
-                        "Dreame cloud auto-discovery selected region=%s for country=%s",
-                        region,
-                        self._country,
-                    )
-                    break
+            records = await self._discover_devices()
+        else:
+            await self._ensure_logged_in()
+            records = await self._get_devices_from_url(
+                self._base_url, relogin_on_401=True
+            )
 
         if records:
             _LOGGER.debug(
@@ -470,6 +476,91 @@ class DreameAPI:
                 self._country,
             )
         return records
+
+    async def _discover_devices(self) -> list[dict[str, Any]]:
+        """Probe known server/country combinations with bounded concurrency."""
+        country_order = [self._country]
+        country_order.extend(code for code in COUNTRY_CODES if code != self._country)
+        region_order = [self._region]
+        region_order.extend(code for code in AUTO_REGION_ORDER if code != self._region)
+        candidates = [
+            (region, country)
+            for country in country_order
+            for region in region_order
+        ]
+        semaphore = asyncio.Semaphore(AUTO_DISCOVERY_CONCURRENCY)
+        rate_limited = asyncio.Event()
+        auth_failures = 0
+        other_errors: list[str] = []
+
+        async def try_candidate(region: str, country: str):
+            nonlocal auth_failures
+            async with semaphore:
+                if rate_limited.is_set():
+                    return None
+                client = DreameAPI(
+                    self._username,
+                    self._password,
+                    region,
+                    country=country,
+                    session=self._session,
+                    request_timeout=AUTO_DISCOVERY_TIMEOUT,
+                )
+                try:
+                    await client.login()
+                    self._authenticated_any = True
+                    records = await client.get_devices()
+                    if records:
+                        return region, country, records, client
+                except DreameAuthError:
+                    auth_failures += 1
+                except DreameAPIError as err:
+                    if "rate-limited" in str(err) or "(429)" in str(err):
+                        rate_limited.set()
+                    other_errors.append(f"{region}/{country}: {err}")
+                return None
+
+        tasks = [
+            asyncio.create_task(try_candidate(region, country))
+            for region, country in candidates
+        ]
+        try:
+            for completed in asyncio.as_completed(tasks):
+                result = await completed
+                if rate_limited.is_set():
+                    raise DreameAPIError(
+                        "Dreame cloud rate-limited automatic discovery; retry later"
+                    )
+                if result:
+                    region, country, records, client = result
+                    self._region = region
+                    self._country = country
+                    self._base_url = REGION_URLS[region]
+                    self._rlc = _compute_rlc(region, country)
+                    self._access_token = client._access_token
+                    self._uid = client._uid
+                    self._region_discovery_done = True
+                    _LOGGER.info(
+                        "Dreame auto-discovery selected backend=%s country=%s",
+                        region,
+                        country,
+                    )
+                    return records
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        if not self._authenticated_any and other_errors:
+            raise DreameAPIError(
+                "Automatic region discovery could not reach Dreame cloud endpoints"
+            )
+        if not self._authenticated_any and auth_failures == len(candidates):
+            raise DreameAuthError(
+                "Dreame rejected credentials for every region/country combination"
+            )
+        return []
 
     async def get_device_record(
         self, device_id: str, records: list[dict[str, Any]] | None = None
