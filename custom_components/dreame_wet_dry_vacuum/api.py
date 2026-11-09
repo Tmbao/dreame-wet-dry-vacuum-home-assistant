@@ -539,6 +539,7 @@ class DreameAPI:
                     self._rlc = _compute_rlc(region, country)
                     self._access_token = client._access_token
                     self._uid = client._uid
+                    self._request_timeout = REQUEST_TIMEOUT
                     self._region_discovery_done = True
                     _LOGGER.info(
                         "Dreame auto-discovery selected backend=%s country=%s",
