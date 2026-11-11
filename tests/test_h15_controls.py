@@ -652,3 +652,49 @@ def test_missing_wash_companion_prevents_partial_batch(component):
     with pytest.raises(ValueError):
         asyncio.run(coordinator.async_set_h15_setting((1, 10), 3))
     coordinator.api.set_h15_properties.assert_not_called()
+
+
+def test_awake_refresh_reads_app_only_settings_once_per_window(component, monkeypatch):
+    """An MQTT push (unit online) triggers a throttled, read-only live read."""
+    coordinator = make_coordinator(component)
+    coordinator.props[(1, 28)] = 1  # awake (not "Sleeping"=7)
+    coordinator.api.get_properties = AsyncMock(return_value=[
+        {"siid": 1, "piid": 8, "code": 0, "value": 2},
+        {"siid": 19, "piid": 2, "code": 0, "value": 3600},
+        {"siid": 23, "piid": 1, "code": -704002000, "value": None},
+    ])
+    coordinator.api.set_h15_properties = AsyncMock()
+    scheduled = []
+
+    class _Done:
+        def done(self):
+            return True
+
+    coordinator.hass = types.SimpleNamespace(
+        async_create_background_task=lambda coro, name: scheduled.append(coro) or _Done()
+    )
+    coordinator.async_set_updated_data = lambda data: None
+    monkeypatch.setattr(component["coordinator"].asyncio, "sleep", AsyncMock())
+
+    coordinator._apply_mqtt_state({(3, 1): 90})
+    coordinator._apply_mqtt_state({(3, 1): 89})  # throttled: same window
+    assert len(scheduled) == 1
+    asyncio.run(scheduled[0])
+
+    assert coordinator.props[(1, 8)] == 2
+    assert coordinator.props[(19, 2)] == 3600
+    assert (23, 1) not in coordinator.props  # failed reads are never invented
+    coordinator.api.set_h15_properties.assert_not_called()
+
+
+def test_awake_refresh_failure_is_non_fatal(component, monkeypatch):
+    coordinator = make_coordinator(component)
+    coordinator.api.get_properties = AsyncMock(side_effect=RuntimeError("offline"))
+    scheduled = []
+    coordinator.hass = types.SimpleNamespace(
+        async_create_background_task=lambda coro, name: scheduled.append(coro) or None
+    )
+    coordinator.async_set_updated_data = lambda data: None
+    monkeypatch.setattr(component["coordinator"].asyncio, "sleep", AsyncMock())
+    coordinator._apply_mqtt_state({(3, 1): 90})
+    asyncio.run(scheduled[0])  # must not raise
