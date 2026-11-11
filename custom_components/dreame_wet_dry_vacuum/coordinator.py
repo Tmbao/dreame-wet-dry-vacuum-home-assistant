@@ -298,6 +298,45 @@ class DreameWetDryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.new_prop_callback(new_keys)
 
         self.async_set_updated_data(self._build_data())
+        if self._is_h15:
+            self._schedule_h15_awake_refresh()
+
+    @callback
+    def _schedule_h15_awake_refresh(self) -> None:
+        """Read app-only settings live while the unit is awake (read-only).
+
+        The cloud cache never holds H15 settings or consumable max life; the app
+        reads them with get_properties when a page opens. An MQTT push means the
+        unit is online, so retry the same targeted read, throttled.
+        """
+        task = getattr(self, "_h15_awake_task", None)
+        if task is not None and not task.done():
+            return
+        now = datetime.now(UTC)
+        sleeping = self.props.get((1, 28)) == 7
+        gap = timedelta(minutes=30 if sleeping else 10)
+        last = getattr(self, "_h15_awake_at", None)
+        if last is not None and now - last < gap:
+            return
+        self._h15_awake_at = now
+        self._h15_awake_task = self.hass.async_create_background_task(
+            self._async_h15_awake_refresh(), "dreame_h15_awake_refresh"
+        )
+
+    async def _async_h15_awake_refresh(self) -> None:
+        await asyncio.sleep(2)
+        try:
+            live = await self._get_h15_targeted_live_props()
+        except Exception as err:  # noqa: BLE001 - best effort, never fatal
+            _LOGGER.debug("H15 awake refresh failed (non-fatal): %s", err)
+            return
+        if not live:
+            return
+        new_keys = self._apply_h15_values(live)
+        if new_keys and self.new_prop_callback:
+            self.new_prop_callback(new_keys)
+        self.async_set_updated_data(self._build_data())
+        _LOGGER.info("H15 awake refresh read %d live properties", len(live))
 
     @staticmethod
     def _property_sort_key(key: str) -> tuple[int, int]:
