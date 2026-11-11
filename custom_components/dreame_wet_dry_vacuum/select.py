@@ -10,6 +10,7 @@ from . import DreameWetDryConfigEntry
 from .const import (
     H15_PRIMARY_SELECT_KEYS,
     H15_SELECT_SETTINGS,
+    H15_SELECT_VALUE_ALIASES,
     KNOWN_SELECT_PROPS,
     decode_schedule,
 )
@@ -76,6 +77,7 @@ class DreameH15Select(DreameH15Setting, SelectEntity):
         raw = self._raw
         if self._key == (24, 1):
             raw = raw & 29 if raw is not None and raw <= 31 else None
+        raw = H15_SELECT_VALUE_ALIASES.get(self._key, {}).get(raw, raw)
         return self._options.get(raw)
 
     @property
