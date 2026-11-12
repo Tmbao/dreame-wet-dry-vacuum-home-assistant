@@ -157,10 +157,27 @@ Once this repository is published to the [HACS default store](https://hacs.xyz/d
 
 1. Go to **Settings → Devices & Services → Add Integration**.
 2. Search for **Dreame Wet & Dry Vacuum**.
-3. Enter your **Dreame account email**, **password**, and **region** (`Europe` or `China / Asia`).
+3. Enter your **Dreame account email**, **password**, and **region** (`auto` by default; the account country comes from Home Assistant, and you are asked for it only when HA has none).
 4. If your account has more than one device, pick the vacuum you want to add.
 
 The integration creates one device with all of its entities. State is updated in real time via MQTT, with a web poll every 5 minutes as a safety net.
+
+## Configuration and data handling
+
+- The login flow asks for the Dreame account credentials. Country selection is taken from Home Assistant when available; there is no hard-coded Israel/account-country fallback.
+- Automatic server discovery prefers authoritative region/domain data returned during login. Bounded regional discovery is used only if needed; the integration does not continuously submit the password to every region.
+- Account credentials and cloud tokens are held by Home Assistant's config-entry storage and are not written to diagnostic exports.
+- Diagnostics redact identifiers and credentials before export. Review an export before sharing it publicly because device state and model/firmware metadata may still be present.
+- Cloud/MQTT delivery is used when available, with periodic HTTP polling as a fallback.
+
+## H15 mapping status
+
+H15 mappings and evidence are recorded in [H15_MAPPING.md](H15_MAPPING.md). The integration distinguishes confirmed, plugin-derived, candidate, and unmapped values. English names and enum labels are used in the mapping profile. Unverified meanings are not inferred from H14. The profile is incomplete pending vendor information and controlled device tests.
+
+In particular, water-tank status and alert readback are exposed only where the observed value has a verified interpretation. Do not treat an absent warning, `-1`, an empty response, or an unknown enum as proof that a tank is installed, empty, or full. Maintenance percentages are shown only when a valid device maximum is available; no guessed service interval is substituted for unknown H15 data.
+
+The supported H15 commands are limited to settings and maintenance actions present in the integration. Every command should be checked in the Home Assistant state and on the physical device. The integration reports failed or unconfirmed writes rather than claiming the device accepted them.
+
 
 ---
 
