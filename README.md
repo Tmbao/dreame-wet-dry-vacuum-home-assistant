@@ -126,7 +126,7 @@ Entity names are translated (English and French) and follow your Home Assistant 
 
 - Home Assistant **2025.1.0** or newer
 - A **Dreame** account (the same one you use in the Dreamehome app) with your vacuum already added
-- Network access from Home Assistant to the Dreame cloud (`eu`/`cn` regions supported)
+- Network access from Home Assistant to the selected Dreame cloud server (including Europe, China and Singapore / Australia)
 
 Python dependencies (`pycryptodome`, `paho-mqtt`) are installed automatically by Home Assistant from the integration's `manifest.json`.
 
@@ -161,6 +161,14 @@ Once this repository is published to the [HACS default store](https://hacs.xyz/d
 4. If your account has more than one device, pick the vacuum you want to add.
 
 The integration creates one device with all of its entities. State is updated in real time via MQTT, with a web poll every 5 minutes as a safety net.
+
+### Australian accounts
+
+Set Home Assistant's country to **Australia** (or select Australia during setup if Home Assistant has no country configured), and leave **Cloud server** on **Automatic**. Login starts on the Singapore backend while sending **AU** as the account country in both the login form and encrypted region header. Server information returned by Dreame takes precedence during automatic discovery.
+
+To choose the backend explicitly, select **Singapore / Southeast Asia / Australia**. Some Australian accounts are hosted in Europe; select **Europe** if that is your account's backend. The account country remains AU with either server. Australia is an account country, not a separate `au.iot.dreame.tech` server.
+
+Automatic discovery sends the password only to the initial server. If login is rejected, it stops rather than trying the password on every server; check the selected backend and confirm the same credentials work in the Dreamehome app. Device discovery after a successful login can check other backends using the issued token.
 
 ## Configuration and data handling
 

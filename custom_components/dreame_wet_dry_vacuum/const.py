@@ -286,7 +286,7 @@ REGIONS = {
     "us": "United States",
     "ru": "Russia",
     "tw": "Taiwan",
-    "sg": "Singapore / Southeast Asia",
+    "sg": "Singapore / Southeast Asia / Australia",
     "in": "India",
     "i2": "International",
     "kr": "South Korea",

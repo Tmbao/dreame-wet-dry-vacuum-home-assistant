@@ -51,6 +51,9 @@ REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
 # Safe bootstrap choices for automatic discovery. The account country is an ISO
 # country code and is deliberately separate from the Dreame cloud backend.
 COUNTRY_BOOTSTRAP_REGION = {
+    # Australian accounts can use the Singapore backend. Start there so login
+    # can succeed before bearer-token device discovery runs; keep country=AU.
+    "AU": "sg",
     "CN": "cn",
     "US": "us",
     "RU": "ru",

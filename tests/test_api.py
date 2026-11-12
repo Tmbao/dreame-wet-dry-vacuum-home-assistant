@@ -4,6 +4,7 @@ import json
 from urllib.parse import urlsplit
 
 import pytest
+from Crypto.Cipher import AES
 
 from custom_components.dreame_wet_dry_vacuum.api import (
     DreameAPI,
@@ -13,6 +14,7 @@ from custom_components.dreame_wet_dry_vacuum.api import (
     _md5_password,
     _parse_prop_value,
 )
+from custom_components.dreame_wet_dry_vacuum.const import DREAME_RLC_KEY
 
 TOKEN_OK = {"access_token": "token-1", "uid": "UID1", "expires_in": 7200}
 
@@ -127,6 +129,53 @@ class TestLogin:
         api = DreameAPI("user", "pw", region="auto", country="US", session=FakeSession(handler))
         run(api.login())
         assert_secure_origin(seen["url"], "us.iot.dreame.tech")
+
+    @pytest.mark.parametrize("region, hostname", [
+        ("auto", "sg.iot.dreame.tech"),
+        ("sg", "sg.iot.dreame.tech"),
+        ("eu", "eu.iot.dreame.tech"),
+    ])
+    def test_australian_login_preserves_country_on_selected_backend(self, region, hostname):
+        def handler(url, kw):
+            assert_secure_origin(url, hostname)
+            assert kw["data"]["country"] == "AU"
+            encrypted = bytes.fromhex(kw["headers"]["dreame-rlc"])
+            padded = AES.new(DREAME_RLC_KEY, AES.MODE_ECB).decrypt(encrypted)
+            plaintext = padded[:-padded[-1]].decode()
+            backend = "sg" if region == "auto" else region
+            assert plaintext == f"{backend}|en|AU"
+            return FakeResponse(200, TOKEN_OK)
+
+        session = FakeSession(handler)
+        api = DreameAPI("user", "pw", region=region, country="au", session=session)
+        run(api.login())
+        assert api.country == "AU"
+        assert api.access_token == "token-1"
+        assert len(session.calls) == 1
+
+    def test_australian_auto_login_rejection_does_not_try_other_servers(self):
+        session = FakeSession(lambda url, kw: FakeResponse(401, {"error": "unauthorized"}))
+        api = DreameAPI("user", "pw", region="auto", country="AU", session=session)
+        with pytest.raises(DreameAuthError):
+            run(api.get_devices())
+        assert len(session.calls) == 1
+        assert_secure_origin(session.calls[0], "sg.iot.dreame.tech")
+
+    def test_australian_auto_discovery_follows_login_region_hint(self):
+        def handler(url, kw):
+            if "oauth/token" in url:
+                assert_secure_origin(url, "sg.iot.dreame.tech")
+                return FakeResponse(200, {**TOKEN_OK, "region": "eu"})
+            assert_secure_origin(url, "eu.iot.dreame.tech")
+            assert kw["headers"]["dreame-rlc"] == _compute_rlc("eu", "AU")
+            return FakeResponse(200, {"data": {"page": {"records": [{"did": "device"}]}}})
+
+        session = FakeSession(handler)
+        api = DreameAPI("user", "pw", region="auto", country="AU", session=session)
+        assert run(api.get_devices()) == [{"did": "device"}]
+        assert api.region == "eu"
+        assert api.country == "AU"
+        assert len(session.calls) == 2
 
     def test_login_response_region_switches_auto_backend(self):
         token = {**TOKEN_OK, "region": "i2"}
