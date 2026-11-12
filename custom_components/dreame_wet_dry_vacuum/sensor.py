@@ -474,8 +474,13 @@ class DreameWetDryConsumableSensor(
         if full <= 0 and self.coordinator.is_h15_pro_heat:
             attrs.pop("full_life_hours")
         if full > 0:
+            # H15: same float expression as Dreamehome MaterialPage
+            # (parseInt(left / max * 100)), so the value always equals the app.
             attrs["percent_remaining"] = max(
-                0, min(100, (left * 100 // full) if self.coordinator.is_h15_pro_heat
+                0, min(100, int(left / full * 100) if self.coordinator.is_h15_pro_heat
                        else round(left / full * 100))
             )
+            if self.coordinator.is_h15_pro_heat:
+                attrs["hours_remaining_app"] = int(left / full * full / 60)
+                attrs["replace_soon"] = attrs["percent_remaining"] < 20
         return attrs

@@ -1245,9 +1245,9 @@ def build_h15_command_plan(command: str, props: dict[tuple[int, int], Any]) -> d
             raise ValueError("Unknown self-cleaning mode")
         return {(1, 1): mode}
     mode = _current(props, (1, 10))
-    if mode not in H15_DRY_MODE_MAP:
+    if mode not in H15_DRY_COMMAND_VALUES:
         raise ValueError("Unknown drying mode")
-    return {(1, 2): {1: 1, 3: 4}[mode]}
+    return {(1, 2): H15_DRY_COMMAND_VALUES[mode]}
 
 H15_WARN_FIELDS = [(0, 1, {1: 'Clean water tank empty'}),
  (1, 1, {1: 'Detergent empty'}),
@@ -1413,3 +1413,57 @@ H15_PRIMARY_SELECT_KEYS = set(H15_SELECT_SETTINGS) - {(1, 75), (1, 81), (1, 82),
 H15_PRIMARY_ALERT_KEYS = {"h15_warn_0_1", "h15_warn_1_1", "h15_warn_2_3",
                           "h15_warn_4_1", "h15_warn_6_1", "h15_warn_7_1", "h15_warn_8_1",
                           "h15_error_11_1", "h15_error_12_1", "h15_error_23_1", "h15_error_28_1"}
+
+
+# ---------------------------------------------------------------------------
+# App-verified display mappings for dreame.hold.w2449e (H15 Pro Heat).
+# Source: Dreamehome RN plugin dreame.vacuum.common versionCode 1240 with the
+# w2449e resource config, executed against a simulated device so every value
+# below is exactly what the official app derives from the raw property.
+# ---------------------------------------------------------------------------
+
+# PopParamList.dryTitleMap: 1/2 = High-Speed, 3/4 = Super-Speed. The app
+# writes 4 for Super-Speed (drySetValueMap 3 -> 4), so the device can report 4.
+H15_DRY_MODE_VALUE_MAP = {1: "High-Speed Drying", 2: "High-Speed Drying", 3: "Super-Speed Drying", 4: "Super-Speed Drying"}
+# PopParamList.drySetValueMap: value sent to the (1, 2) dry command.
+H15_DRY_COMMAND_VALUES = {1: 1, 2: 2, 3: 4, 4: 4}
+for _mode_key in [(1, 10), (1, 82), (1, 83)]:
+    H15_PROPERTY_META[_mode_key]["value_map"] = dict(H15_DRY_MODE_VALUE_MAP)
+# Raw values that the selects show as an equivalent option (no duplicate options).
+H15_SELECT_VALUE_ALIASES: dict[tuple[int, int], dict[int, int]] = {
+    _mode_key: {2: 1, 4: 3} for _mode_key in [(1, 10), (1, 82), (1, 83)]
+}
+
+# CustomWashSetting.getCleanWaterTitleMap with correctPropCleanWater=true.
+H15_WATER_LEVEL_MAP.update({1: "Slightly dry", 2: "Standard", 3: "High"})
+H15_PROPERTY_META[(16, 2)]["value_map"] = dict(H15_WATER_LEVEL_MAP)
+
+# PopParamList.selfCleanTextMap applies to all three wash-mode copies
+# (washDryKeyMap: 1.8 / 1.81 / 1.75).
+H15_SELF_CLEAN_MODE_MAP.update({2: "Standard Immersive Self-Cleaning", 3: "Deep-Clean Immersive Self-Cleaning",
+                                4: "Smart Self-Cleaning", 5: "Hot Wash Self-Cleaning"})
+for _mode_key in [(1, 8), (1, 75), (1, 81)]:
+    H15_PROPERTY_META[_mode_key]["value_map"] = dict(H15_SELF_CLEAN_MODE_MAP)
+
+# StatusUtil.getStatusText for every WorkMode (1.28), as shown in the app.
+# H15_WORK_MODE_MAP keeps the internal WorkMode names (vacuum attributes).
+H15_WORK_STATE_APP_TEXT: dict[int, str] = {
+    1: "Mop in progress", 2: "Offline", 3: "Standby", 4: "Charging",
+    5: "Self-cleaning with hot water in progress", 6: "Drying", 7: "Sleeping",
+    8: "Vacuuming", 9: "Adding clean water", 10: "Floor washing paused",
+    11: "Self-cleaning paused", 12: "Drying paused", 13: "OTA is being updated",
+    14: "Voice package is being upgraded", 15: "Charging Complete",
+    16: "Mop in progress", 17: "Mop in progress", 18: "Mop in progress",
+    19: "Mop in progress", 20: "Mop in progress", 21: "Mop in progress",
+    22: "Mop in progress", 23: "Drying", 24: "Drying", 25: "Drying",
+    26: "Self-cleaning with hot water in progress",
+    27: "Self-cleaning with hot water in progress",
+    28: "Self-cleaning with hot water in progress", 29: "Vacuuming paused",
+    30: "Self-cleaning paused", 31: "Self-cleaning paused", 32: "Drying",
+    33: "Drying", 34: "Smart drying in progress",
+    35: "Smart moisture protection in progress", 36: "Smart re-wash in progress",
+    37: "Self-cleaning paused", 40: "Mop in progress", 41: "Mop in progress",
+    42: "Hot wash self-cleaning in progress", 43: "Hot wash self-cleaning paused",
+}
+H15_PROPERTY_META[(1, 28)]["value_map"] = dict(H15_WORK_STATE_APP_TEXT)
+H15_PROPERTY_META[(1, 28)]["note"] = "Display text from Dreamehome StatusUtil.getStatusText (w2449e). Internal WorkMode name is exposed as the vacuum work_mode attribute."
