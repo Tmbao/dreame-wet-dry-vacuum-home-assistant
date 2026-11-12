@@ -73,23 +73,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: DreameWetDryConfigEntry)
     )
 
     try:
-        if entry.data.get(CONF_REGION, "auto") != "auto":
-            await api.login()
+        await api.login()
         devices = await api.get_devices()
     except DreameAuthError as err:
         raise ConfigEntryAuthFailed(f"Dreame credentials rejected: {err}") from err
     except DreameAPIError as err:
         raise ConfigEntryNotReady(f"Cannot connect to Dreame cloud: {err}") from err
-
-    if api.region != entry.data.get(CONF_REGION, "auto") or api.country != country:
-        hass.config_entries.async_update_entry(
-            entry,
-            data={
-                **entry.data,
-                CONF_REGION: api.region,
-                CONF_COUNTRY: api.country,
-            },
-        )
 
     device_id = entry.data[CONF_DEVICE_ID]
     device_info = next((d for d in devices if str(d.get("did")) == str(device_id)), {})
